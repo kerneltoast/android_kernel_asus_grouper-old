@@ -32,6 +32,7 @@ modules.builtin
 *.lzo
 *.patch
 *.gcno
+/sultan
 
 #
 # Top-level generic files
