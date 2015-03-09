@@ -35,8 +35,6 @@
 #endif
 #include "sdhci-pltfm.h"
 
-#include "../debug_mmc.h"
-
 static struct sdhci_ops sdhci_pltfm_ops = {
 };
 
@@ -200,8 +198,6 @@ int sdhci_pltfm_suspend(struct platform_device *dev, pm_message_t state)
 	struct sdhci_host *host = platform_get_drvdata(dev);
 	int ret;
 
-	MMC_printk("%s: ++", mmc_hostname(host->mmc));
-
 	ret = sdhci_suspend_host(host, state);
 	if (ret) {
 		dev_err(&dev->dev, "suspend failed, error = %d\n", ret);
@@ -215,8 +211,6 @@ int sdhci_pltfm_suspend(struct platform_device *dev, pm_message_t state)
 		sdhci_resume_host(host);
 	}
 
-	MMC_printk("%s: --", mmc_hostname(host->mmc));
-
 	return ret;
 }
 EXPORT_SYMBOL_GPL(sdhci_pltfm_suspend);
@@ -225,8 +219,6 @@ int sdhci_pltfm_resume(struct platform_device *dev)
 {
 	struct sdhci_host *host = platform_get_drvdata(dev);
 	int ret = 0;
-
-	MMC_printk("%s: ++", mmc_hostname(host->mmc));
 
 	if (host->ops && host->ops->resume)
 		ret = host->ops->resume(host);
@@ -238,8 +230,6 @@ int sdhci_pltfm_resume(struct platform_device *dev)
 	ret = sdhci_resume_host(host);
 	if (ret)
 		dev_err(&dev->dev, "resume failed, error = %d\n", ret);
-
-	MMC_printk("%s: --", mmc_hostname(host->mmc));
 
 	return ret;
 }

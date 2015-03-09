@@ -20,8 +20,6 @@
 #include <linux/mmc/host.h>
 #include "queue.h"
 
-#include "../debug_mmc.h"
-
 #define MMC_QUEUE_BOUNCESZ	65536
 
 #define MMC_QUEUE_SUSPENDED	(1 << 0)
@@ -142,7 +140,7 @@ static void mmc_queue_setup_discard(struct request_queue *q,
 
 	queue_flag_set_unlocked(QUEUE_FLAG_DISCARD, q);
 	q->limits.max_discard_sectors = max_discard;
-	if (card->erased_byte == 0 && !mmc_can_discard(card))
+	if (card->erased_byte == 0)
 		q->limits.discard_zeroes_data = 1;
 	q->limits.discard_granularity = card->pref_erase << 9;
 	/* granularity must not be greater than max. discard */
@@ -351,7 +349,6 @@ void mmc_queue_suspend(struct mmc_queue *mq)
 
 	if (!(mq->flags & MMC_QUEUE_SUSPENDED)) {
 		mq->flags |= MMC_QUEUE_SUSPENDED;
-		MMC_printk("%s: blk_stop_queue start", mmc_hostname(mq->card->host));
 
 		spin_lock_irqsave(q->queue_lock, flags);
 		blk_stop_queue(q);
@@ -372,7 +369,6 @@ void mmc_queue_resume(struct mmc_queue *mq)
 
 	if (mq->flags & MMC_QUEUE_SUSPENDED) {
 		mq->flags &= ~MMC_QUEUE_SUSPENDED;
-		MMC_printk("%s: blk_start_queue start", mmc_hostname(mq->card->host));
 
 		up(&mq->thread_sem);
 

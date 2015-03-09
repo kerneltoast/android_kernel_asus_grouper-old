@@ -1352,7 +1352,6 @@ static void sdhci_set_ios(struct mmc_host *mmc, struct mmc_ios *ios)
 
 	if (host->version >= SDHCI_SPEC_300) {
 		u16 clk, ctrl_2;
-		unsigned int clock;
 
 		/* In case of UHS-I modes, set High Speed Enable */
 		if (((ios->timing == MMC_TIMING_UHS_SDR50) ||
@@ -1850,6 +1849,7 @@ static void sdhci_enable_preset_value(struct mmc_host *mmc, bool enable)
 int sdhci_enable(struct mmc_host *mmc)
 {
 	struct sdhci_host *host = mmc_priv(mmc);
+	u16 clk;
 
 	if (!mmc->card || mmc->card->type == MMC_TYPE_SDIO)
 		return 0;
@@ -1866,6 +1866,7 @@ int sdhci_enable(struct mmc_host *mmc)
 int sdhci_disable(struct mmc_host *mmc, int lazy)
 {
 	struct sdhci_host *host = mmc_priv(mmc);
+	u16 clk;
 
 	if (!mmc->card || mmc->card->type == MMC_TYPE_SDIO)
 		return 0;
@@ -2320,22 +2321,42 @@ out:
 int sdhci_suspend_host(struct sdhci_host *host, pm_message_t state)
 {
 	int ret = 0;
+	bool has_tuning_timer;
 	struct mmc_host *mmc = host->mmc;
 
 	sdhci_disable_card_detection(host);
 
 	/* Disable tuning since we are suspending */
-	if (host->version >= SDHCI_SPEC_300 && host->tuning_count &&
-	    host->tuning_mode == SDHCI_TUNING_MODE_1) {
+	has_tuning_timer = host->version >= SDHCI_SPEC_300 &&
+		host->tuning_count && host->tuning_mode == SDHCI_TUNING_MODE_1;
+	if (has_tuning_timer) {
 		host->flags &= ~SDHCI_NEEDS_RETUNING;
 		mod_timer(&host->tuning_timer, jiffies +
 			host->tuning_count * HZ);
 	}
 
 	if (mmc->card) {
+		/*
+		 * If eMMC cards are put in sleep state, Vccq can be disabled
+		 * but Vcc would still be powered on. In resume, we only restore
+		 * the controller context. So, set MMC_PM_KEEP_POWER flag.
+		 */
+		if (mmc_card_can_sleep(mmc) &&
+			!(mmc->caps & MMC_CAP2_NO_SLEEP_CMD))
+			mmc->pm_flags = MMC_PM_KEEP_POWER;
+
 		ret = mmc_suspend_host(host->mmc);
-		if (ret)
-			goto err_suspend_host;
+		if (ret) {
+			if (has_tuning_timer) {
+				host->flags |= SDHCI_NEEDS_RETUNING;
+				mod_timer(&host->tuning_timer, jiffies +
+						host->tuning_count * HZ);
+			}
+
+			sdhci_enable_card_detection(host);
+
+			return ret;
+		}
 	}
 
 	if (mmc->pm_flags & MMC_PM_KEEP_POWER)
@@ -2344,24 +2365,11 @@ int sdhci_suspend_host(struct sdhci_host *host, pm_message_t state)
 
 	sdhci_mask_irqs(host, SDHCI_INT_ALL_MASK);
 
-	if (host->vmmc) {
+	if (host->vmmc)
 		ret = regulator_disable(host->vmmc);
-		if (ret)
-			pr_err("%s: failed to disable regulator\n", __func__);
-	}
 
 	if (host->irq)
 		disable_irq(host->irq);
-
-	return 0;
-
-err_suspend_host:
-	/* Set the re-tuning expiration flag */
-	if ((host->version >= SDHCI_SPEC_300) && host->tuning_count &&
-	    (host->tuning_mode == SDHCI_TUNING_MODE_1))
-		host->flags |= SDHCI_NEEDS_RETUNING;
-
-	sdhci_enable_card_detection(host);
 
 	return ret;
 }
@@ -2457,7 +2465,6 @@ int sdhci_add_host(struct sdhci_host *host)
 	u32 max_current_caps;
 	unsigned int ocr_avail;
 	int ret;
-	int rc;
 
 	WARN_ON(host == NULL);
 	if (host == NULL)
@@ -2855,13 +2862,7 @@ int sdhci_add_host(struct sdhci_host *host)
 		printk(KERN_INFO "%s: no vmmc regulator found\n", mmc_hostname(mmc));
 		host->vmmc = NULL;
 	} else {
-		rc = regulator_set_voltage(host->vmmc, 3000000, 3100000);
-		if(rc) {
-			dev_err(mmc_dev(host->mmc), "%s regulator_set_voltage failed: %d", "vmmc", rc);
-		}
-		else {
-			regulator_enable(host->vmmc);
-		}
+		regulator_enable(host->vmmc);
 	}
 
 	sdhci_init(host, 0);

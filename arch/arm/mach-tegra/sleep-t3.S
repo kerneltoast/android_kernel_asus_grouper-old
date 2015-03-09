@@ -1,7 +1,7 @@
 /*
  * arch/arm/mach-tegra/include/mach/sleep-t3.S
  *
- * Copyright (c) 2010-2012, NVIDIA Corporation.
+ * Copyright (c) 2010-2011, NVIDIA Corporation.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -92,8 +92,19 @@
 #define CLK_RESET_PLLP_OUTB		0xa8
 
 #define PMC_PLLP_WB0_OVERRIDE		0xf8
+#define PMC_PLLM_WB0_OVERRIDE		0x1dc
 
 #define CLK_RESET_CLK_SOURCE_MSELECT	0x3b4
+#define CLK_RESET_CLK_ENB_H_SET		0x328
+#define CLK_RESET_CLK_ENB_H_CLR		0x32c
+#define CLK_RESET_CLK_RST_DEV_H_SET		0x308
+#define CLK_RESET_CLK_RST_DEV_H_CLR		0x30c
+
+#define I2C_CNFG	0x0
+#define I2C_ADDR0	0x4
+#define I2C_DATA1	0xc
+#define I2C_DATA2	0x10
+#define I2C_STATUS	0x1c
 
 #define MSELECT_CLKM			(0x3 << 30)
 
@@ -201,13 +212,14 @@ ENDPROC(tegra3_cpu_reset)
 #ifdef CONFIG_PM_SLEEP
 
 /*
- * tegra3_sleep_core_finish(unsigned long int)
+ * tegra3_sleep_core(unsigned long v2p)
  *
  * enters suspend in LP0 or LP1 by turning off the mmu and jumping to
  * tegra3_tear_down_core in IRAM
  */
-ENTRY(tegra3_sleep_core_finish)
-	bl	tegra_cpu_exit_coherency
+ENTRY(tegra3_sleep_core)
+	mov	r12, pc 		@ return here is via r12
+	b	tegra_cpu_save
 
 	/* preload all the address literals that are needed for the
 	 * CPU power-gating process, to avoid loads from SDRAM (which are
@@ -226,33 +238,22 @@ ENTRY(tegra3_sleep_core_finish)
 	mov32	r2, TEGRA_IRAM_CODE_AREA
 	add	r1, r1, r2
 	b	tegra_turn_off_mmu
-ENDPROC(tegra3_sleep_core_finish)
+ENDPROC(tegra3_sleep_core)
 
 /*
- * tegra3_sleep_cpu_secondary_finish(unsigned long v2p)
+ * tegra3_sleep_cpu_secondary(unsigned long v2p)
  *
  * Enters LP2 on secondary CPU by exiting coherency and powergating the CPU.
  */
-ENTRY(tegra3_sleep_cpu_secondary_finish)
-	mov	r6, lr
-
-	dsb
-#ifdef MULTI_CACHE
-	mov32	r10, cpu_cache
-	mov	lr, pc
-	ldr	pc, [r10, #CACHE_FLUSH_KERN_ALL]
-#else
-	bl	__cpuc_flush_kern_all
-#endif
-
-	bl	tegra_cpu_exit_coherency
+ENTRY(tegra3_sleep_cpu_secondary)
+	mov	r12, pc 			@ return here is via r12
+	b	tegra_cpu_save
 
 	/* Powergate this CPU. */
 	mov	r0, #0				@ power mode flags (!hotplug)
 	bl	tegra3_cpu_reset
-	mov	r0, #1				@ never return here
-	mov	pc, r6
-ENDPROC(tegra3_sleep_cpu_secondary_finish)
+	b	.				@ should never get here
+ENDPROC(tegra3_sleep_cpu_secondary)
 
 /*
  * tegra3_tear_down_cpu
@@ -356,6 +357,66 @@ ENTRY(tegra3_lp1_reset)
 
 	mov32	r4, ((1<<28) | (8))	@ burst policy is PLLX
 	str	r4, [r0, #CLK_RESET_CCLK_BURST]
+
+#ifdef CONFIG_TEGRA_LP1_950
+lp1_voltset:
+	/* Restore the Core voltage to high on LP1 resume */
+	/* Reset(Enable/Disable) the DVC-I2C Controller*/
+	mov r1, #(1 << 15)
+	str r1, [r0, #CLK_RESET_CLK_RST_DEV_H_SET]
+
+	/* Wait for 2us */
+	mov32	r7, TEGRA_TMRUS_BASE
+	wait_for_us r1, r7, r9
+	add r1, r1, #2
+	wait_until r1, r7, r9
+
+	mov r1, #(1 << 15)
+	str r1, [r0, #CLK_RESET_CLK_RST_DEV_H_CLR]
+
+	/* Enable the DVC-I2C Controller */
+	mov r1, #(1 << 15)
+	str r1, [r0, #CLK_RESET_CLK_ENB_H_SET]
+
+
+	/* Same I2C transaction protocol as suspend */
+	ldr r1, lp1_register_pmuslave_addr
+	cmp r1, #0
+	beq lp1_voltskip_resume
+
+	ldr r4, lp1_register_i2c_base_addr
+	str r1, [r4, #I2C_ADDR0]
+
+	mov32 r1, 0x2
+	str r1, [r4, #I2C_CNFG]
+
+	ldr r1, lp1_register_core_highvolt
+	str r1, [r4, #I2C_DATA1]
+
+	mov32 r1, 0
+	str r1, [r4, #I2C_DATA2]
+
+	mov32 r1, 0xA02
+	str r1, [r4, #I2C_CNFG]
+
+	wait_for_us r1, r7, r9
+	mov32 r3, 0x7D0   /* Wait for 2ms and try transaction again */
+	add r0, r1, r3
+loop_i2c_status_resume:
+	add r1, r1, #0xFA /* Check status every 250us */
+	wait_until r1, r7, r9
+	cmp r0, r1
+	beq lp1_voltset
+
+	ldr r3, [r4, #I2C_STATUS]
+	cmp r3, #0
+	bne loop_i2c_status_resume
+
+lp1_voltskip_resume:
+	/* Disable the DVC-I2C Controller */
+	mov r0, #(1 << 15)
+	str r0, [r5, #CLK_RESET_CLK_ENB_H_CLR]
+#endif
 
 #if defined (CONFIG_CACHE_L2X0)
 	/* power up L2 */
@@ -501,6 +562,21 @@ tegra3_sdram_pad_address:
 tegra3_sdram_pad_size:
 	.word	tegra3_sdram_pad_address - tegra3_sdram_pad_save
 
+#ifdef CONFIG_TEGRA_LP1_950
+	.globl lp1_register_pmuslave_addr
+	.globl lp1_register_i2c_base_addr
+	.globl lp1_register_core_lowvolt
+	.globl lp1_register_core_highvolt
+lp1_register_pmuslave_addr:
+	.word	0
+lp1_register_i2c_base_addr:
+	.word	0
+lp1_register_core_lowvolt:
+	.word	0
+lp1_register_core_highvolt:
+	.word	0
+#endif
+
 /*
  * tegra3_tear_down_core
  *
@@ -527,15 +603,80 @@ tegra3_cpu_clk32k:
 	tst	r0, #PMC_CTRL_SIDE_EFFECT_LP0
 	beq	lp1_clocks_prepare
 
-	/* enable PLLM via PMC in LP0 */
+	/* enable PLLM auto-restart via PMC in LP0; restore override settings */
 	ldr	r0, [r4, #PMC_PLLP_WB0_OVERRIDE]
 	orr	r0, r0, #((1 << 12) | (1 << 11))
 	str	r0, [r4, #PMC_PLLP_WB0_OVERRIDE]
+	ldr	r0, [r4, #PMC_SCRATCH2]
+	str	r0, [r4, #PMC_PLLM_WB0_OVERRIDE]
 	mov	pc, lr
 
+lp1_clocks_prepare:
+	/* Prepare to set the Core to the lowest voltage if supported.
+	 * Start by setting the I2C clocks to make the I2C transfer */
+#ifdef CONFIG_TEGRA_LP1_950
+	/* Set up the PWR I2C GPIOs with the right masks*/
+
+	/* Reset(Set/Clr) the DVC-I2C Controller*/
+	mov r0, #(1 << 15)
+	str r0, [r5, #CLK_RESET_CLK_RST_DEV_H_SET]
+
+	/* Wait for 2us */
+	wait_for_us r1, r7, r9
+	mov32 r0, 0x7D0
+	add r1, r1, r0
+	wait_until r1, r7, r9
+
+	mov r0, #(1 << 15)
+	str r0, [r5, #CLK_RESET_CLK_RST_DEV_H_CLR]
+
+	/* Enable the DVC-I2C Controller */
+	mov r0, #(1 << 15)
+	str r0, [r5, #CLK_RESET_CLK_ENB_H_SET]
+
+	/* I2C transfer protocol:
+	 * 4 packets: Slaveaddr + WriteConfigure + Data1 + Data2 */
+	ldr r0, lp1_register_pmuslave_addr
+	cmp r0, #0
+	beq lp1_volt_skip
+	ldr r1, lp1_register_i2c_base_addr
+	str r0, [r1, #I2C_ADDR0]
+
+	mov32 r0, 0x2
+	str r0, [r1, #I2C_CNFG]
+
+	ldr r0, lp1_register_core_lowvolt
+	str r0, [r1, #I2C_DATA1]
+
+	mov32 r0, 0
+	str r0, [r1, #I2C_DATA2]
+
+	/* Send I2C transaction */
+	mov32 r0, 0xA02
+	str r0, [r1, #I2C_CNFG]
+
+	/* Check the transaction status before proceeding */
+	wait_for_us r2, r7, r9
+	mov32 r3, 0x7D0 /* Wait for 2ms for I2C transaction */
+	add r3, r2, r3
+loop_i2c_status_suspend:
+	add r2, r2, #0xFA /* Check status every 250us */
+	cmp r3, r2
+	beq lp1_volt_skip  /* Waited for 2ms, I2C transaction didn't take place */
+	wait_until r2, r7, r9
+
+	ldr r0, [r1, #I2C_STATUS]
+	cmp r0, #0
+	bne loop_i2c_status_suspend
+lp1_volt_skip:
+
+	/* Disable the DVC-I2C Controller */
+	mov r0, #(1 << 15)
+	str r0, [r5, #CLK_RESET_CLK_ENB_H_CLR]
+
+#endif
 	/* start by jumping to clkm to safely disable PLLs, then jump
 	 * to clks */
-lp1_clocks_prepare:
 	mov	r0, #(1 << 28)
 	str	r0, [r5, #CLK_RESET_SCLK_BURST]
 	str	r0, [r5, #CLK_RESET_CCLK_BURST]
