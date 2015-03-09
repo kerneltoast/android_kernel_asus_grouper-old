@@ -287,21 +287,21 @@ static int mmc_read_ext_csd(struct mmc_card *card, u8 *ext_csd)
 	switch (ext_csd[EXT_CSD_CARD_TYPE] & EXT_CSD_CARD_TYPE_MASK) {
 	case EXT_CSD_CARD_TYPE_DDR_52 | EXT_CSD_CARD_TYPE_52 |
 	     EXT_CSD_CARD_TYPE_26:
-		card->ext_csd.hs_max_dtr = 52000000;
+		card->ext_csd.hs_max_dtr = 41000000;
 		card->ext_csd.card_type = EXT_CSD_CARD_TYPE_DDR_52;
 		break;
 	case EXT_CSD_CARD_TYPE_DDR_1_2V | EXT_CSD_CARD_TYPE_52 |
 	     EXT_CSD_CARD_TYPE_26:
-		card->ext_csd.hs_max_dtr = 52000000;
+		card->ext_csd.hs_max_dtr = 41000000;
 		card->ext_csd.card_type = EXT_CSD_CARD_TYPE_DDR_1_2V;
 		break;
 	case EXT_CSD_CARD_TYPE_DDR_1_8V | EXT_CSD_CARD_TYPE_52 |
 	     EXT_CSD_CARD_TYPE_26:
-		card->ext_csd.hs_max_dtr = 52000000;
+		card->ext_csd.hs_max_dtr = 41000000;
 		card->ext_csd.card_type = EXT_CSD_CARD_TYPE_DDR_1_8V;
 		break;
 	case EXT_CSD_CARD_TYPE_52 | EXT_CSD_CARD_TYPE_26:
-		card->ext_csd.hs_max_dtr = 52000000;
+		card->ext_csd.hs_max_dtr = 41000000;
 		break;
 	case EXT_CSD_CARD_TYPE_26:
 		card->ext_csd.hs_max_dtr = 26000000;
@@ -438,6 +438,9 @@ static int mmc_read_ext_csd(struct mmc_card *card, u8 *ext_csd)
 	else
 		card->erased_byte = 0x0;
 
+	if ((card->cid.manfid == 0x15) && (ext_csd[64] & 0x01))
+		card->ext_csd.feature_support |= MMC_DISCARD_FEATURE;
+
 out:
 	return err;
 }
@@ -522,11 +525,12 @@ MMC_DEV_ATTR(hwrev, "0x%x\n", card->cid.hwrev);
 MMC_DEV_ATTR(manfid, "0x%06x\n", card->cid.manfid);
 MMC_DEV_ATTR(name, "%s\n", card->cid.prod_name);
 MMC_DEV_ATTR(oemid, "0x%04x\n", card->cid.oemid);
-MMC_DEV_ATTR(prv, "0x%x\n", card->cid.prod_rev);
 MMC_DEV_ATTR(serial, "0x%08x\n", card->cid.serial);
 MMC_DEV_ATTR(enhanced_area_offset, "%llu\n",
 		card->ext_csd.enhanced_area_offset);
 MMC_DEV_ATTR(enhanced_area_size, "%u\n", card->ext_csd.enhanced_area_size);
+MMC_DEV_ATTR(sec_count, "0x%x\n", card->ext_csd.sec_count);
+MMC_DEV_ATTR(prv, "0x%x\n", card->cid.prod_rev);
 
 static struct attribute *mmc_std_attrs[] = {
 	&dev_attr_cid.attr,
@@ -539,10 +543,11 @@ static struct attribute *mmc_std_attrs[] = {
 	&dev_attr_manfid.attr,
 	&dev_attr_name.attr,
 	&dev_attr_oemid.attr,
-	&dev_attr_prv.attr,
 	&dev_attr_serial.attr,
 	&dev_attr_enhanced_area_offset.attr,
 	&dev_attr_enhanced_area_size.attr,
+	&dev_attr_sec_count.attr,
+	&dev_attr_prv.attr,
 	NULL,
 };
 
@@ -668,40 +673,38 @@ static int mmc_init_card(struct mmc_host *host, u32 ocr,
 			goto free_card;
 	}
 
-	if (!oldcard) {
-		/*
-		 * Fetch and process extended CSD.
-		 */
+	/*
+	 * Fetch and process extended CSD.
+	 */
 
-		err = mmc_get_ext_csd(card, &ext_csd);
-		if (err)
-			goto free_card;
-		err = mmc_read_ext_csd(card, ext_csd);
-		if (err)
-			goto free_card;
+	err = mmc_get_ext_csd(card, &ext_csd);
+	if (err)
+		goto free_card;
+	err = mmc_read_ext_csd(card, ext_csd);
+	if (err)
+		goto free_card;
 
-		if (card->ext_csd.refresh) {
-			init_timer(&card->timer);
-			card->timer.data = (unsigned long) card;
-			card->timer.function = mmc_refresh;
-			card->timer.expires = MMC_BKOPS_INTERVAL <
-				MMC_REFRESH_INTERVAL ? MMC_BKOPS_INTERVAL :
-				MMC_REFRESH_INTERVAL;
-			card->timer.expires *= HZ;
-			card->timer.expires += jiffies;
-			add_timer(&card->timer);
-		}
-		/* If doing byte addressing, check if required to do sector
-		 * addressing.  Handle the case of <2GB cards needing sector
-		 * addressing.  See section 8.1 JEDEC Standard JED84-A441;
-		 * ocr register has bit 30 set for sector addressing.
-		 */
-		if (!(mmc_card_blockaddr(card)) && (rocr & (1<<30)))
-			mmc_card_set_blockaddr(card);
-
-		/* Erase size depends on CSD and Extended CSD */
-		mmc_set_erase_size(card);
+	if (card->ext_csd.refresh) {
+		init_timer(&card->timer);
+		card->timer.data = (unsigned long) card;
+		card->timer.function = mmc_refresh;
+		card->timer.expires = MMC_BKOPS_INTERVAL <
+			MMC_REFRESH_INTERVAL ? MMC_BKOPS_INTERVAL :
+			MMC_REFRESH_INTERVAL;
+		card->timer.expires *= HZ;
+		card->timer.expires += jiffies;
+		add_timer(&card->timer);
 	}
+	/* If doing byte addressing, check if required to do sector
+	 * addressing.  Handle the case of <2GB cards needing sector
+	 * addressing.  See section 8.1 JEDEC Standard JED84-A441;
+	 * ocr register has bit 30 set for sector addressing.
+	 */
+	if (!(mmc_card_blockaddr(card)) && (rocr & (1<<30)))
+		mmc_card_set_blockaddr(card);
+
+	/* Erase size depends on CSD and Extended CSD */
+	mmc_set_erase_size(card);
 
 	/*
 	 * If enhanced_area_en is TRUE, host needs to enable ERASE_GRP_DEF
