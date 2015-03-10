@@ -2673,7 +2673,7 @@ struct tegra_usb_phy *tegra_usb_phy_open(int instance, void __iomem *regs,
 		if (err)
 			printk(KERN_ERR "gpio_direction_input failed for input %d\n", AC_PRESENT_GPIO);
 
-		usb_phy_data[0].vbus_irq = gpio_to_irq(AC_PRESENT_GPIO);
+		//usb_phy_data[0].vbus_irq = gpio_to_irq(AC_PRESENT_GPIO);
 		printk(KERN_INFO "%s instance %d TI AC_PRESENT_GPIO = %d \n", __func__, instance, AC_PRESENT_GPIO);
 	}
 

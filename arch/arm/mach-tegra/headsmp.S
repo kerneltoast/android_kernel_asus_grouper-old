@@ -3,7 +3,7 @@
  *
  * CPU initialization routines for Tegra SoCs
  *
- * Copyright (c) 2009-2011, NVIDIA Corporation.
+ * Copyright (c) 2009-2012, NVIDIA Corporation. All rights reserved.
  * Copyright (c) 2011 Google, Inc.
  * Author: Colin Cross <ccross@android.com>
  *         Gary King <gking@nvidia.com>
@@ -66,7 +66,7 @@ ENTRY(tegra_resume)
 
 	cpu_id	r0
 	cmp	r0, #0				@ CPU0?
-	bne	cpu_resume			@ no
+	bne	tegra_cpu_resume_phys		@ no
 
 #ifndef CONFIG_ARCH_TEGRA_2x_SOC
 	@ Clear the flow controller flags for this CPU.
@@ -82,17 +82,15 @@ ENTRY(tegra_resume)
 	mov32	r0, TEGRA_ARM_PERIF_BASE
 	ldr	r1, [r0]
 	orr	r1, r1, #1
-#if defined(CONFIG_HAVE_ARM_SCU)
-	orr	r1, r1, #(1 << 3)	@ Enabled SCU speculative line fill.
-#endif
 	str	r1, [r0]
 
 #ifdef CONFIG_TRUSTED_FOUNDATIONS
-	/* wake up (should have specified args?) */
-	bl	tegra_generic_smc
+	/* wake up */
+	mov	r0, #0x00000003
+	bl	tegra_generic_smc_local
 #endif
 
-	b	cpu_resume
+	b	tegra_cpu_resume_phys
 ENDPROC(tegra_resume)
 #endif
 
