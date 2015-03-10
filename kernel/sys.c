@@ -39,7 +39,6 @@
 #include <linux/syscore_ops.h>
 #include <linux/version.h>
 #include <linux/ctype.h>
-#include <linux/sched.h>
 
 #include <linux/compat.h>
 #include <linux/syscalls.h>
@@ -47,9 +46,6 @@
 #include <linux/user_namespace.h>
 
 #include <linux/kmsg_dump.h>
-#include <linux/gpio.h>
-#include "../arch/arm/mach-tegra/gpio-names.h"
-
 /* Move somewhere else to avoid recompiling? */
 #include <generated/utsrelease.h>
 
@@ -126,7 +122,6 @@ EXPORT_SYMBOL(cad_pid);
 
 void (*pm_power_off_prepare)(void);
 
- extern void disable_auto_hotplug(void);
 /*
  * Returns true if current's euid is same as p's uid or euid,
  * or has CAP_SYS_NICE to p's user_ns.
@@ -368,7 +363,6 @@ EXPORT_SYMBOL(unregister_reboot_notifier);
  */
 void kernel_restart(char *cmd)
 {
-	disable_auto_hotplug();
 	kernel_restart_prepare(cmd);
 	if (!cmd)
 		printk(KERN_EMERG "Restarting system.\n");
@@ -408,18 +402,8 @@ EXPORT_SYMBOL_GPL(kernel_halt);
  *
  *	Shutdown everything and perform a clean system power_off.
  */
-
-extern unsigned battery_cable_status;
 void kernel_power_off(void)
 {
-	 if ((battery_cable_status)||(!gpio_get_value(TEGRA_GPIO_PV1))) {
-		char cmd[] = "chrager-mode";
-
-		printk(KERN_EMERG "kernel_power_off: go to charger mode!");
-		kernel_restart(cmd);
-	 }
-
-	disable_auto_hotplug();
 	kernel_shutdown_prepare(SYSTEM_POWER_OFF);
 	if (pm_power_off_prepare)
 		pm_power_off_prepare();
@@ -1185,16 +1169,15 @@ DECLARE_RWSEM(uts_sem);
  * Work around broken programs that cannot handle "Linux 3.0".
  * Instead we map 3.x to 2.6.40+x, so e.g. 3.0 would be 2.6.40
  */
-static int override_release(char __user *release, size_t len)
+static int override_release(char __user *release, int len)
 {
 	int ret = 0;
+	char buf[65];
 
 	if (current->personality & UNAME26) {
-		const char *rest = UTS_RELEASE;
-		char buf[65] = { 0 };
+		char *rest = UTS_RELEASE;
 		int ndots = 0;
 		unsigned v;
-		size_t copy;
 
 		while (*rest) {
 			if (*rest == '.' && ++ndots >= 3)
@@ -1204,9 +1187,8 @@ static int override_release(char __user *release, size_t len)
 			rest++;
 		}
 		v = ((LINUX_VERSION_CODE >> 8) & 0xff) + 40;
-		copy = clamp_t(size_t, len, 1, sizeof(buf));
-		copy = scnprintf(buf, copy, "2.6.%u%s", v, rest);
-		ret = copy_to_user(release, buf, copy + 1);
+		snprintf(buf, len, "2.6.%u%s", v, rest);
+		ret = copy_to_user(release, buf, len);
 	}
 	return ret;
 }
@@ -1711,7 +1693,6 @@ SYSCALL_DEFINE5(prctl, int, option, unsigned long, arg2, unsigned long, arg3,
 		unsigned long, arg4, unsigned long, arg5)
 {
 	struct task_struct *me = current;
-	struct task_struct *tsk;
 	unsigned char comm[sizeof(me->comm)];
 	long error;
 
@@ -1855,26 +1836,6 @@ SYSCALL_DEFINE5(prctl, int, option, unsigned long, arg2, unsigned long, arg3,
 					PR_MCE_KILL_EARLY : PR_MCE_KILL_LATE;
 			else
 				error = PR_MCE_KILL_DEFAULT;
-			break;
-		case PR_SET_TIMERSLACK_PID:
-			if (current->pid != (pid_t)arg3 &&
-					!capable(CAP_SYS_NICE))
-				return -EPERM;
-			rcu_read_lock();
-			tsk = find_task_by_pid_ns((pid_t)arg3, &init_pid_ns);
-			if (tsk == NULL) {
-				rcu_read_unlock();
-				return -EINVAL;
-			}
-			get_task_struct(tsk);
-			rcu_read_unlock();
-			if (arg2 <= 0)
-				tsk->timer_slack_ns =
-					tsk->default_timer_slack_ns;
-			else
-				tsk->timer_slack_ns = arg2;
-			put_task_struct(tsk);
-			error = 0;
 			break;
 		default:
 			error = -EINVAL;
