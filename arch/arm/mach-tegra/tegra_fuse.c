@@ -459,3 +459,30 @@ static struct kernel_param_ops tegra_revision_ops = {
 
 module_param_cb(tegra_chip_id, &tegra_chip_id_ops, &tegra_id.chipid, 0444);
 module_param_cb(tegra_chip_rev, &tegra_revision_ops, &tegra_id.revision, 0444);
+
+static char chippriv[16]; /* Permanent buffer for private string */
+static int __init tegra_bootloader_tegraid(char *str)
+{
+	u32 id[5];
+	int i = 0;
+	char *priv = NULL;
+
+	do {
+		id[i++] = simple_strtoul(str, &str, 16);
+	} while (*str++ && i < ARRAY_SIZE(id));
+
+	if (*(str - 1) == '.') {
+		strncpy(chippriv, str, sizeof(chippriv) - 1);
+		priv = chippriv;
+		if (strlen(str) > sizeof(chippriv) - 1)
+			pr_err("### tegraid.priv in kernel arg truncated\n");
+	}
+
+	while (i < ARRAY_SIZE(id))
+		id[i++] = 0;
+
+	tegra_set_tegraid(id[0], id[1], id[2], id[3], id[4], priv);
+	return 0;
+}
+
+early_param("tegraid", tegra_bootloader_tegraid);
